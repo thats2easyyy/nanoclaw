@@ -494,6 +494,30 @@ export function setSession(groupFolder: string, sessionId: string): void {
   ).run(groupFolder, sessionId);
 }
 
+export function clearSession(groupFolder: string): void {
+  db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
+}
+
+// --- Model preference accessors ---
+
+const MODEL_ALIASES: Record<string, string> = {
+  sonnet: 'claude-sonnet-4-6',
+  opus: 'claude-opus-4-6',
+  haiku: 'claude-haiku-4-5-20251001',
+};
+
+export function resolveModelAlias(alias: string): string | null {
+  return MODEL_ALIASES[alias.toLowerCase()] || null;
+}
+
+export function getModelPreference(groupFolder: string): string | undefined {
+  return getRouterState(`model:${groupFolder}`);
+}
+
+export function setModelPreference(groupFolder: string, model: string): void {
+  setRouterState(`model:${groupFolder}`, model);
+}
+
 export function getAllSessions(): Record<string, string> {
   const rows = db
     .prepare('SELECT group_folder, session_id FROM sessions')
