@@ -41,6 +41,12 @@ export interface RegisteredGroup {
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
 }
 
+export interface MessageMedia {
+  id: string;           // telegram file_unique_id
+  mimeType: string;     // image/jpeg, image/png, image/webp
+  base64: string;       // base64-encoded image data
+}
+
 export interface NewMessage {
   id: string;
   chat_jid: string;
@@ -50,6 +56,7 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
+  media?: MessageMedia;
 }
 
 export interface ScheduledTask {

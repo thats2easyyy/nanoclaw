@@ -35,6 +35,7 @@ import {
   setSession,
   storeChatMetadata,
   storeMessage,
+  StoredMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { startIpcWatcher } from './ipc.js';
@@ -144,6 +145,23 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
+  const images: Record<string, { mimeType: string; base64: string }> = {};
+  for (const msg of missedMessages) {
+    if (msg.media_path) {
+      try {
+        const data = fs.readFileSync(msg.media_path);
+        const ext = path.extname(msg.media_path).slice(1) || 'jpeg';
+        const mimeMap: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+        images[msg.id] = {
+          mimeType: mimeMap[ext] || 'image/jpeg',
+          base64: data.toString('base64'),
+        };
+      } catch (err) {
+        logger.warn({ mediaPath: msg.media_path, err }, 'Failed to load media from disk');
+      }
+    }
+  }
+
   const prompt = formatMessages(missedMessages);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
@@ -173,6 +191,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
+  const hasImages = Object.keys(images).length > 0;
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
@@ -191,7 +210,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (result.status === 'error') {
       hadError = true;
     }
-  });
+  }, hasImages ? images : undefined);
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -218,6 +237,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  images?: Record<string, { mimeType: string; base64: string }>,
 ): Promise<'success' | 'error'> {
   const isMain = group.folder === MAIN_GROUP_FOLDER;
   const sessionId = sessions[group.folder];
@@ -268,6 +288,7 @@ async function runAgent(
         chatJid,
         isMain,
         model: getModelPreference(group.folder),
+        images: Object.keys(images || {}).length > 0 ? images : undefined,
       },
       (proc, containerName) => queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
@@ -356,7 +377,23 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend);
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          // Build images map for piped messages
+          const pipeImages: Record<string, { mimeType: string; base64: string }> = {};
+          for (const msg of messagesToSend as StoredMessage[]) {
+            if (msg.media_path) {
+              try {
+                const data = fs.readFileSync(msg.media_path);
+                const ext = path.extname(msg.media_path).slice(1) || 'jpeg';
+                const mimeMap: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+                pipeImages[msg.id] = {
+                  mimeType: mimeMap[ext] || 'image/jpeg',
+                  base64: data.toString('base64'),
+                };
+              } catch { /* ignore */ }
+            }
+          }
+
+          if (queue.sendMessage(chatJid, formatted, Object.keys(pipeImages).length > 0 ? pipeImages : undefined)) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
@@ -420,7 +457,24 @@ async function main(): Promise<void> {
 
   // Channel callbacks (shared by all channels)
   const channelOpts = {
-    onMessage: (_chatJid: string, msg: NewMessage) => storeMessage(msg),
+    onMessage: (_chatJid: string, msg: NewMessage) => {
+      let mediaPath: string | undefined;
+      if (msg.media) {
+        try {
+          const sanitizedJid = msg.chat_jid.replace(/[^a-zA-Z0-9_:-]/g, '_');
+          const ext = msg.media.mimeType.split('/')[1] || 'jpg';
+          const mediaDir = path.join(DATA_DIR, 'media', sanitizedJid);
+          fs.mkdirSync(mediaDir, { recursive: true });
+          const filePath = path.join(mediaDir, `${msg.id}.${ext}`);
+          fs.writeFileSync(filePath, Buffer.from(msg.media.base64, 'base64'));
+          mediaPath = filePath;
+          logger.debug({ chatJid: msg.chat_jid, mediaPath }, 'Saved media to disk');
+        } catch (err) {
+          logger.warn({ chatJid: msg.chat_jid, err }, 'Failed to save media to disk');
+        }
+      }
+      storeMessage(msg, mediaPath);
+    },
     onChatMetadata: (chatJid: string, timestamp: string, name?: string, channel?: string, isGroup?: boolean) =>
       storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,

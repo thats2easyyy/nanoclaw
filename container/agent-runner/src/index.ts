@@ -19,6 +19,10 @@ import path from 'path';
 import { query, HookCallback, PreCompactHookInput, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
+type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
 interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -29,6 +33,7 @@ interface ContainerInput {
   assistantName?: string;
   model?: string;
   secrets?: Record<string, string>;
+  images?: Record<string, { mimeType: string; base64: string }>;
 }
 
 interface ContainerOutput {
@@ -51,7 +56,7 @@ interface SessionsIndex {
 
 interface SDKUserMessage {
   type: 'user';
-  message: { role: 'user'; content: string };
+  message: { role: 'user'; content: string | ContentBlock[] };
   parent_tool_use_id: null;
   session_id: string;
 }
@@ -69,10 +74,22 @@ class MessageStream {
   private waiting: (() => void) | null = null;
   private done = false;
 
-  push(text: string): void {
+  push(text: string, images?: Record<string, { mimeType: string; base64: string }>): void {
+    let content: string | ContentBlock[] = text;
+    if (images && Object.keys(images).length > 0) {
+      const blocks: ContentBlock[] = [];
+      for (const [_id, img] of Object.entries(images)) {
+        blocks.push({
+          type: 'image',
+          source: { type: 'base64', media_type: img.mimeType, data: img.base64 },
+        });
+      }
+      blocks.push({ type: 'text', text });
+      content = blocks;
+    }
     this.queue.push({
       type: 'user',
-      message: { role: 'user', content: text },
+      message: { role: 'user', content },
       parent_tool_use_id: null,
       session_id: '',
     });
@@ -297,9 +314,9 @@ function shouldClose(): boolean {
 
 /**
  * Drain all pending IPC input messages.
- * Returns messages found, or empty array.
+ * Returns messages and any attached images found.
  */
-function drainIpcInput(): string[] {
+function drainIpcInput(): { messages: string[]; images?: Record<string, { mimeType: string; base64: string }> } {
   try {
     fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
     const files = fs.readdirSync(IPC_INPUT_DIR)
@@ -307,6 +324,7 @@ function drainIpcInput(): string[] {
       .sort();
 
     const messages: string[] = [];
+    let images: Record<string, { mimeType: string; base64: string }> | undefined;
     for (const file of files) {
       const filePath = path.join(IPC_INPUT_DIR, file);
       try {
@@ -314,33 +332,36 @@ function drainIpcInput(): string[] {
         fs.unlinkSync(filePath);
         if (data.type === 'message' && data.text) {
           messages.push(data.text);
+          if (data.images && Object.keys(data.images).length > 0) {
+            images = { ...(images || {}), ...data.images };
+          }
         }
       } catch (err) {
         log(`Failed to process input file ${file}: ${err instanceof Error ? err.message : String(err)}`);
         try { fs.unlinkSync(filePath); } catch { /* ignore */ }
       }
     }
-    return messages;
+    return { messages, images };
   } catch (err) {
     log(`IPC drain error: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
+    return { messages: [] };
   }
 }
 
 /**
  * Wait for a new IPC message or _close sentinel.
- * Returns the messages as a single string, or null if _close.
+ * Returns the message text and any images, or null if _close.
  */
-function waitForIpcMessage(): Promise<string | null> {
+function waitForIpcMessage(): Promise<{ text: string; images?: Record<string, { mimeType: string; base64: string }> } | null> {
   return new Promise((resolve) => {
     const poll = () => {
       if (shouldClose()) {
         resolve(null);
         return;
       }
-      const messages = drainIpcInput();
+      const { messages, images } = drainIpcInput();
       if (messages.length > 0) {
-        resolve(messages.join('\n'));
+        resolve({ text: messages.join('\n'), images });
         return;
       }
       setTimeout(poll, IPC_POLL_MS);
@@ -362,9 +383,10 @@ async function runQuery(
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
+  images?: Record<string, { mimeType: string; base64: string }>,
 ): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
   const stream = new MessageStream();
-  stream.push(prompt);
+  stream.push(prompt, images);
 
   // Poll IPC for follow-up messages and _close sentinel during the query
   let ipcPolling = true;
@@ -378,10 +400,10 @@ async function runQuery(
       ipcPolling = false;
       return;
     }
-    const messages = drainIpcInput();
+    const { messages, images: ipcImages } = drainIpcInput();
     for (const text of messages) {
       log(`Piping IPC message into active query (${text.length} chars)`);
-      stream.push(text);
+      stream.push(text, ipcImages);
     }
     setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
   };
@@ -532,9 +554,13 @@ async function main(): Promise<void> {
     prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
   }
   const pending = drainIpcInput();
-  if (pending.length > 0) {
-    log(`Draining ${pending.length} pending IPC messages into initial prompt`);
-    prompt += '\n' + pending.join('\n');
+  if (pending.messages.length > 0) {
+    log(`Draining ${pending.messages.length} pending IPC messages into initial prompt`);
+    prompt += '\n' + pending.messages.join('\n');
+  }
+  // Merge any pending images into containerInput.images
+  if (pending.images) {
+    containerInput.images = { ...(containerInput.images || {}), ...pending.images };
   }
 
   // Query loop: run query → wait for IPC message → run new query → repeat
@@ -543,7 +569,7 @@ async function main(): Promise<void> {
     while (true) {
       log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
 
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt, containerInput.images);
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
@@ -571,8 +597,9 @@ async function main(): Promise<void> {
         break;
       }
 
-      log(`Got new message (${nextMessage.length} chars), starting new query`);
-      prompt = nextMessage;
+      log(`Got new message (${nextMessage.text.length} chars), starting new query`);
+      prompt = nextMessage.text;
+      containerInput.images = nextMessage.images;
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

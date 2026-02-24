@@ -5,6 +5,7 @@ import { clearSession, resolveModelAlias, setModelPreference, getModelPreference
 import { logger } from '../logger.js';
 import {
   Channel,
+  MessageMedia,
   OnChatMetadata,
   OnInboundMessage,
   RegisteredGroup,
@@ -225,7 +226,48 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const timestamp = new Date(ctx.message.date * 1000).toISOString();
+      const senderName = ctx.from?.first_name || ctx.from?.username || ctx.from?.id?.toString() || 'Unknown';
+      const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+
+      this.opts.onChatMetadata(chatJid, timestamp);
+
+      let media: MessageMedia | undefined;
+      try {
+        const photos = ctx.message.photo;
+        const largest = photos[photos.length - 1];
+        const file = await ctx.api.getFile(largest.file_id);
+        const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const ext = file.file_path?.split('.').pop()?.toLowerCase() || 'jpg';
+        const mimeMap: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+        media = {
+          id: largest.file_unique_id,
+          mimeType: mimeMap[ext] || 'image/jpeg',
+          base64: buffer.toString('base64'),
+        };
+      } catch (err) {
+        logger.warn({ chatJid, err }, 'Failed to download Telegram photo, falling back to placeholder');
+      }
+
+      this.opts.onMessage(chatJid, {
+        id: ctx.message.message_id.toString(),
+        chat_jid: chatJid,
+        sender: ctx.from?.id?.toString() || '',
+        sender_name: senderName,
+        content: `[Photo]${caption}`,
+        timestamp,
+        is_from_me: false,
+        media,
+      });
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) =>
       storeNonText(ctx, '[Voice message]'),

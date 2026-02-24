@@ -36,6 +36,7 @@ export interface ContainerInput {
   assistantName?: string;
   model?: string;
   secrets?: Record<string, string>;
+  images?: Record<string, { mimeType: string; base64: string }>;
 }
 
 export interface ContainerOutput {
@@ -274,8 +275,9 @@ export async function runContainerAgent(
     input.secrets = readSecrets();
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
-    // Remove secrets from input so they don't appear in logs
+    // Remove secrets and images from input so they don't appear in logs
     delete input.secrets;
+    delete input.images;
 
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
     let parseBuffer = '';

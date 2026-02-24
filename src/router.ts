@@ -1,4 +1,5 @@
-import { Channel, NewMessage } from './types.js';
+import { StoredMessage } from './db.js';
+import { Channel } from './types.js';
 
 export function escapeXml(s: string): string {
   if (!s) return '';
@@ -9,10 +10,11 @@ export function escapeXml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-export function formatMessages(messages: NewMessage[]): string {
-  const lines = messages.map((m) =>
-    `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(m.content)}</message>`,
-  );
+export function formatMessages(messages: StoredMessage[]): string {
+  const lines = messages.map((m) => {
+    const imageAttr = m.media_path ? ` image-id="${escapeXml(m.id)}"` : '';
+    return `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}"${imageAttr}>${escapeXml(m.content)}</message>`;
+  });
   return `<messages>\n${lines.join('\n')}\n</messages>`;
 }
 
