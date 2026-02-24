@@ -10,6 +10,48 @@ import {
   RegisteredGroup,
 } from '../types.js';
 
+/**
+ * Converts basic markdown to Telegram HTML format.
+ * Handles: **bold**, *italic*, `code`, ```code blocks```, ~~strikethrough~~
+ */
+export function markdownToTelegramHtml(text: string): string {
+  let result = text;
+
+  // Escape HTML special characters first
+  result = result
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Horizontal rules (---)
+  result = result.replace(/^-{3,}$/gm, '');
+
+  // Headings (## text) → bold
+  result = result.replace(/^#{1,6}\s+(.+)$/gm, '<b>$1</b>');
+
+  // Code blocks (``` ... ```) - multiline
+  result = result.replace(/```([^`]+)```/g, '<pre><code>$1</code></pre>');
+
+  // Inline code (` ... `)
+  result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Bold (**text** or __text__)
+  result = result.replace(/\*\*([^\*]+)\*\*/g, '<b>$1</b>');
+  result = result.replace(/__([^_]+)__/g, '<b>$1</b>');
+
+  // Italic (*text* or _text_) - must come after bold
+  result = result.replace(/\*([^\*]+)\*/g, '<i>$1</i>');
+  result = result.replace(/_([^_]+)_/g, '<i>$1</i>');
+
+  // Strikethrough (~~text~~)
+  result = result.replace(/~~([^~]+)~~/g, '<s>$1</s>');
+
+  // Links [text](url) → <a href="url">text</a>
+  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+
+  return result;
+}
+
 export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
@@ -232,19 +274,23 @@ export class TelegramChannel implements Channel {
     try {
       const numericId = jid.replace(/^tg:/, '');
 
+      // Convert markdown to HTML for Telegram rendering
+      const htmlText = markdownToTelegramHtml(text);
+
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
-      if (text.length <= MAX_LENGTH) {
-        await this.bot.api.sendMessage(numericId, text);
+      if (htmlText.length <= MAX_LENGTH) {
+        await this.bot.api.sendMessage(numericId, htmlText, { parse_mode: 'HTML' });
       } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
+        for (let i = 0; i < htmlText.length; i += MAX_LENGTH) {
           await this.bot.api.sendMessage(
             numericId,
-            text.slice(i, i + MAX_LENGTH),
+            htmlText.slice(i, i + MAX_LENGTH),
+            { parse_mode: 'HTML' },
           );
         }
       }
-      logger.info({ jid, length: text.length }, 'Telegram message sent');
+      logger.info({ jid, length: htmlText.length }, 'Telegram message sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
     }

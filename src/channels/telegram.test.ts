@@ -63,7 +63,7 @@ vi.mock('grammy', () => ({
   },
 }));
 
-import { TelegramChannel, TelegramChannelOpts } from './telegram.js';
+import { TelegramChannel, TelegramChannelOpts, markdownToTelegramHtml } from './telegram.js';
 
 // --- Test helpers ---
 
@@ -696,6 +696,7 @@ describe('TelegramChannel', () => {
       expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
         '100200300',
         'Hello',
+        { parse_mode: 'HTML' },
       );
     });
 
@@ -709,6 +710,7 @@ describe('TelegramChannel', () => {
       expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
         '-1001234567890',
         'Group message',
+        { parse_mode: 'HTML' },
       );
     });
 
@@ -725,11 +727,13 @@ describe('TelegramChannel', () => {
         1,
         '100200300',
         'x'.repeat(4096),
+        { parse_mode: 'HTML' },
       );
       expect(currentBot().api.sendMessage).toHaveBeenNthCalledWith(
         2,
         '100200300',
         'x'.repeat(904),
+        { parse_mode: 'HTML' },
       );
     });
 
@@ -767,6 +771,56 @@ describe('TelegramChannel', () => {
       await channel.sendMessage('tg:100200300', 'No bot');
 
       // No error, no API call
+    });
+  });
+
+  // --- markdownToTelegramHtml ---
+
+  describe('markdownToTelegramHtml', () => {
+    it('escapes HTML special characters', () => {
+      expect(markdownToTelegramHtml('a < b & c > d')).toBe('a &lt; b &amp; c &gt; d');
+    });
+
+    it('converts bold markdown to HTML', () => {
+      expect(markdownToTelegramHtml('**bold text**')).toBe('<b>bold text</b>');
+    });
+
+    it('converts underscore bold to HTML', () => {
+      expect(markdownToTelegramHtml('__bold text__')).toBe('<b>bold text</b>');
+    });
+
+    it('converts italic markdown to HTML', () => {
+      expect(markdownToTelegramHtml('*italic text*')).toBe('<i>italic text</i>');
+    });
+
+    it('converts underscore italic to HTML', () => {
+      expect(markdownToTelegramHtml('_italic text_')).toBe('<i>italic text</i>');
+    });
+
+    it('converts inline code to HTML', () => {
+      expect(markdownToTelegramHtml('use `npm install`')).toBe('use <code>npm install</code>');
+    });
+
+    it('converts code blocks to HTML', () => {
+      expect(markdownToTelegramHtml('```console.log("hi")```')).toBe('<pre><code>console.log("hi")</code></pre>');
+    });
+
+    it('converts strikethrough to HTML', () => {
+      expect(markdownToTelegramHtml('~~deleted~~')).toBe('<s>deleted</s>');
+    });
+
+    it('handles mixed formatting', () => {
+      const input = '**bold** and *italic* and `code`';
+      const expected = '<b>bold</b> and <i>italic</i> and <code>code</code>';
+      expect(markdownToTelegramHtml(input)).toBe(expected);
+    });
+
+    it('returns plain text unchanged', () => {
+      expect(markdownToTelegramHtml('hello world')).toBe('hello world');
+    });
+
+    it('escapes HTML before converting markdown', () => {
+      expect(markdownToTelegramHtml('**<script>alert(1)</script>**')).toBe('<b>&lt;script&gt;alert(1)&lt;/script&gt;</b>');
     });
   });
 
