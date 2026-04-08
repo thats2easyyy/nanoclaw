@@ -77,7 +77,12 @@ export function startCredentialProxy(
             const existingBeta = headers['anthropic-beta'];
             const oauthBeta = 'oauth-2025-04-20';
             if (typeof existingBeta === 'string' && existingBeta.length > 0) {
-              if (!existingBeta.split(',').map((s) => s.trim()).includes(oauthBeta)) {
+              if (
+                !existingBeta
+                  .split(',')
+                  .map((s) => s.trim())
+                  .includes(oauthBeta)
+              ) {
                 headers['anthropic-beta'] = `${existingBeta},${oauthBeta}`;
               }
             } else {
