@@ -67,14 +67,21 @@ export function startCredentialProxy(
           delete headers['x-api-key'];
           headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
         } else {
-          // OAuth mode: replace placeholder Bearer token with the real one
-          // only when the container actually sends an Authorization header
-          // (exchange request + auth probes). Post-exchange requests use
-          // x-api-key only, so they pass through without token injection.
-          if (headers['authorization']) {
-            delete headers['authorization'];
-            if (oauthToken) {
-              headers['authorization'] = `Bearer ${oauthToken}`;
+          // OAuth mode: inject the real Bearer token + oauth beta header on every request.
+          // The newer Claude Code OAuth flow does NOT use the temp-API-key exchange —
+          // it sends the Bearer token directly with `anthropic-beta: oauth-2025-04-20`.
+          delete headers['authorization'];
+          delete headers['x-api-key'];
+          if (oauthToken) {
+            headers['authorization'] = `Bearer ${oauthToken}`;
+            const existingBeta = headers['anthropic-beta'];
+            const oauthBeta = 'oauth-2025-04-20';
+            if (typeof existingBeta === 'string' && existingBeta.length > 0) {
+              if (!existingBeta.split(',').map((s) => s.trim()).includes(oauthBeta)) {
+                headers['anthropic-beta'] = `${existingBeta},${oauthBeta}`;
+              }
+            } else {
+              headers['anthropic-beta'] = oauthBeta;
             }
           }
         }
