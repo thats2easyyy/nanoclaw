@@ -10,12 +10,13 @@ data/
 logs/
 
 # Groups - only track base structure and specific CLAUDE.md files
+# NOTE: groups/main/CLAUDE.md is untracked here (contains per-install
+# persona / personal preferences). Global CLAUDE.md stays tracked.
 groups/*
 !groups/main/
 !groups/global/
 groups/main/*
 groups/global/*
-!groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
 
 # Secrets
