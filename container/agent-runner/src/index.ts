@@ -438,6 +438,9 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
+      // Override with NANOCLAW_AGENT_MODEL if set (e.g. claude-haiku-4-5);
+      // otherwise the SDK picks its default (Sonnet 4.6).
+      model: process.env.NANOCLAW_AGENT_MODEL || undefined,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
